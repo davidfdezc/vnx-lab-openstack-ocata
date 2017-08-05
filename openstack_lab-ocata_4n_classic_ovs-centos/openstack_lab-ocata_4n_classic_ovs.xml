@@ -57,7 +57,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
   <net name="virbr0"  mode="virtual_bridge" managed="no"/>
 
   <vm name="controller" type="lxc" arch="x86_64">
-    <filesystem type="cow">filesystems/rootfs_lxc_ubuntu64-ostack-controller</filesystem>
+    <filesystem type="cow">filesystems/rootfs_lxc_centos64-ostack-controller</filesystem>
     <!--console id="0" display="yes"/-->
     <if id="1" net="MgmtNet">
       <ipv4>10.0.0.11/24</ipv4>
@@ -95,30 +95,24 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     </exec>
 
     <!-- STEP 1: Basic services -->
-    <filetree seq="step1" root="/etc/mysql/conf.d/">conf/controller/mysql/mysqld_openstack.cnf</filetree>
-    <!--
-	# mariadb in ubuntu 16.04 does not seem to manage correctly the "bind-address" and a 
-    # "DBAPIError exception ... 'Specified key was too long; max key length is 767 bytes" error
-    # when executing su -s /bin/sh -c "keystone-manage db_sync" keystone
-    # the bind problem can be solved by changing the default value of bind-address to listen on all 
-	# interfaces
-        sed -i -e 's/^bind-address\s*=.*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf 
-	# But both problems can be solved with this 60-openstack.cnf script taken from 
-   	#	https://bugs.launchpad.net/openstack-manuals/+bug/1575688
-    -->
-    <filetree seq="step1" root="/etc/mysql/mariadb.conf.d/">conf/controller/mysql/60-openstack.cnf</filetree>
-    <filetree seq="step1" root="/etc/">conf/controller/memcached/memcached.conf</filetree>
+    <filetree seq="step1" root="/etc/my.cnf.d/">conf/controller/mysql/openstack.cnf</filetree>
+    <filetree seq="step1" root="/etc/sysconfig">conf/controller/memcached/memcached</filetree>
     <!--filetree seq="step1" root="/etc/mongodb.conf">conf/controller/mongodb/mongodb.conf</filetree!-->
     <exec seq="step1" type="verbatim">
-        # Change all ocurrences of utf8mb4 to utf8. See comment above
-        #for f in $( find /etc/mysql/mariadb.conf.d/ -type f ); do echo "Changing utf8mb4 to utf8 in file $f"; sed -i -e 's/utf8mb4/utf8/g' $f; done
-        service mysql restart
+        systemctl enable mariadb.service
+        systemctl start mariadb.service
+        mysqladmin password xxxx
+
         #mysql_secure_installation # to be run manually
+
+        systemctl enable rabbitmq-server.service
+        systemctl start rabbitmq-server.service
 
         rabbitmqctl add_user openstack xxxx
         rabbitmqctl set_permissions openstack ".*" ".*" ".*" 
 
-        service memcached restart
+        systemctl enable memcached.service
+        systemctl start memcached.service
 
         #service mongodb stop
         #rm -f /var/lib/mongodb/journal/prealloc.*
@@ -127,12 +121,12 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
 
     <!-- STEP 2: Identity service -->
     <filetree seq="step2" root="/etc/keystone/">conf/controller/keystone/keystone.conf</filetree>
-    <!--filetree seq="step2" root="/etc/apache2/sites-available/">conf/controller/apache2/wsgi-keystone.conf</filetree!-->
     <filetree seq="step2" root="/root/bin/">conf/controller/keystone/admin-openrc.sh</filetree>
     <filetree seq="step2" root="/root/bin/">conf/controller/keystone/demo-openrc.sh</filetree>
     <exec seq="step2" type="verbatim">
         mysql -u root --password='xxxx' -e "CREATE DATABASE keystone;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'controller' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%' IDENTIFIED BY 'xxxx'; flush privileges;"
 
         su -s /bin/sh -c "keystone-manage db_sync" keystone
@@ -145,9 +139,10 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
           --bootstrap-public-url http://controller:5000/v3/ \
           --bootstrap-region-id RegionOne
 
-        echo "ServerName controller" >> /etc/apache2/apache2.conf
-        #ln -s /etc/apache2/sites-available/wsgi-keystone.conf /etc/apache2/sites-enabled
-        service apache2 restart
+        echo "ServerName controller" >> /etc/httpd/conf/httpd.conf
+        ln -s /usr/share/keystone/wsgi-keystone.conf /etc/httpd/conf.d/
+        systemctl enable httpd.service
+        systemctl start httpd.service
         rm -f /var/lib/keystone/keystone.db
         sleep 3
 
@@ -159,21 +154,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         export OS_AUTH_URL=http://controller:35357/v3
         export OS_IDENTITY_API_VERSION=3
 
-        #export OS_TOKEN=ee173fc22384618b472e
-        #export OS_URL=http://controller:35357/v3
-        #export OS_IDENTITY_API_VERSION=3
-
-        # Create endpoints
-        #openstack service create --name keystone --description "OpenStack Identity" identity
-        #openstack endpoint create --region RegionOne identity public http://controller:5000/v3
-        #openstack endpoint create --region RegionOne identity internal http://controller:5000/v3
-        #openstack endpoint create --region RegionOne identity admin http://controller:35357/v3
         # Create users and projects
-        #openstack domain create --description "Default Domain" default
-        #openstack project create --domain default --description "Admin Project" admin
-        #openstack user create --domain default --password=xxxx admin
-        #openstack role create admin
-        #openstack role add --project admin --user admin admin
         openstack project create --domain default --description "Service Project" service
         openstack project create --domain default --description "Demo Project" demo
         openstack user create --domain default --password=xxxx demo
@@ -187,6 +168,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <exec seq="step3" type="verbatim">
         mysql -u root --password='xxxx' -e "CREATE DATABASE glance;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'controller' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'%' IDENTIFIED BY 'xxxx';"
         source /root/bin/admin-openrc.sh
         openstack user create --domain default --password=xxxx glance
@@ -197,22 +179,26 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         openstack endpoint create --region RegionOne image admin http://controller:9292
 
         su -s /bin/sh -c "glance-manage db_sync" glance
-        service glance-registry restart
-        service glance-api restart
+        systemctl enable openstack-glance-api.service openstack-glance-registry.service
+        systemctl start openstack-glance-api.service openstack-glance-registry.service
         #rm -f /var/lib/glance/glance.sqlite
     </exec>
 
     <!-- STEP 4: Compute service (Nova) -->
     <filetree seq="step41" root="/etc/nova/">conf/controller/nova/nova.conf</filetree>
+    <filetree seq="step41" root="/tmp/">conf/controller/nova/00-nova-placement-api.conf-addendum</filetree>
     <exec seq="step41" type="verbatim">
         mysql -u root --password='xxxx' -e "CREATE DATABASE nova_api;"
         mysql -u root --password='xxxx' -e "CREATE DATABASE nova;"
         mysql -u root --password='xxxx' -e "CREATE DATABASE nova_cell0;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova_api.*   TO 'nova'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova_api.*   TO 'nova'@'controller' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova_api.*   TO 'nova'@'%' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova.*       TO 'nova'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova.*       TO 'nova'@'controller' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova.*       TO 'nova'@'%' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova_cell0.* TO 'nova'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova_cell0.* TO 'nova'@'controller' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova_cell0.* TO 'nova'@'%' IDENTIFIED BY 'xxxx';"
 
         source /root/bin/admin-openrc.sh
@@ -232,16 +218,24 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         openstack endpoint create --region RegionOne placement internal http://controller:8778
         openstack endpoint create --region RegionOne placement admin    http://controller:8778
 
+        # Due to a packaging bug, add some content to /etc/httpd/conf.d/00-nova-placement-api.conf
+        cat /tmp/00-nova-placement-api.conf-addendum >> /etc/httpd/conf.d/00-nova-placement-api.conf
+
+        systemctl restart httpd
+
 	    su -s /bin/sh -c "nova-manage api_db sync" nova
         su -s /bin/sh -c "nova-manage cell_v2 map_cell0" nova
         su -s /bin/sh -c "nova-manage cell_v2 create_cell --name=cell1 --verbose" nova
 	    su -s /bin/sh -c "nova-manage db sync" nova
 
-        service nova-api restart
-        service nova-consoleauth restart
-        service nova-scheduler restart
-        service nova-conductor restart
-        service nova-novncproxy restart
+        systemctl enable openstack-nova-api.service \
+                         openstack-nova-consoleauth.service openstack-nova-scheduler.service \
+                         openstack-nova-conductor.service openstack-nova-novncproxy.service
+        mkdir /var/lock/nova
+        chown nova:nova -R /var/lock/nova
+        systemctl start openstack-nova-api.service \
+                         openstack-nova-consoleauth.service openstack-nova-scheduler.service \
+                         openstack-nova-conductor.service openstack-nova-novncproxy.service
         #rm -f /var/lib/nova/nova.sqlite
     </exec>
 
@@ -259,6 +253,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <exec seq="step51" type="verbatim">
         mysql -u root --password='xxxx' -e "CREATE DATABASE neutron;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'controller' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'%' IDENTIFIED BY 'xxxx';"
         source /root/bin/admin-openrc.sh
         openstack user create --domain default --password=xxxx neutron
@@ -308,6 +303,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <exec seq="step72" type="verbatim">
         mysql -u root --password='xxxx' -e "CREATE DATABASE trove;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON trove.* TO 'trove'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON trove.* TO 'trove'@'controller' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON trove.* TO 'trove'@'%' IDENTIFIED BY 'xxxx';"
         source /root/bin/admin-openrc.sh
 
@@ -501,9 +497,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
   </vm>
 
   <vm name="network" type="lxc" arch="x86_64">
-    <filesystem type="cow">filesystems/rootfs_lxc_ubuntu64-ostack-network</filesystem>
-  <!--vm name="network" type="libvirt" subtype="kvm" os="linux" exec_mode="sdisk" arch="x86_64">
-    <filesystem type="cow">filesystems/rootfs_kvm_ubuntu64-ostack-network</filesystem-->
+    <filesystem type="cow">filesystems/rootfs_lxc_centos64-ostack-network</filesystem>
     <mem>1G</mem>
     <if id="1" net="MgmtNet">
       <ipv4>10.0.0.21/24</ipv4>
@@ -592,9 +586,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
 
 
   <vm name="compute1" type="lxc" arch="x86_64">
-    <filesystem type="cow">filesystems/rootfs_lxc_ubuntu64-ostack-compute</filesystem>
-  <!--vm name="compute1" type="libvirt" subtype="kvm" os="linux" exec_mode="sdisk" arch="x86_64" vcpu="2"-->
-    <!--filesystem type="cow">filesystems/rootfs_kvm_ubuntu64-ostack-compute</filesystem-->
+    <filesystem type="cow">filesystems/rootfs_lxc_centos64-ostack-compute</filesystem>
     <mem>2G</mem>
     <if id="1" net="MgmtNet">
       <ipv4>10.0.0.31/24</ipv4>
@@ -637,7 +629,10 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <filetree seq="step42" root="/etc/nova/">conf/compute1/nova/nova.conf</filetree>
     <filetree seq="step42" root="/etc/nova/">conf/compute1/nova/nova-compute.conf</filetree>
     <exec seq="step42" type="verbatim">
-        service nova-compute restart
+        systemctl enable libvirtd.service openstack-nova-compute.service
+        mkdir /var/lock/nova
+        chown nova:nova -R /var/lock/nova
+        systemctl start libvirtd.service openstack-nova-compute.service
         #rm -f /var/lib/nova/nova.sqlite
     </exec>
 
@@ -658,9 +653,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
   </vm>
 
   <vm name="compute2" type="lxc" arch="x86_64">
-    <filesystem type="cow">filesystems/rootfs_lxc_ubuntu64-ostack-compute</filesystem>
-  <!--vm name="compute2" type="libvirt" subtype="kvm" os="linux" exec_mode="sdisk" arch="x86_64" vcpu="2"-->
-    <!--filesystem type="cow">filesystems/rootfs_kvm_ubuntu64-ostack-compute</filesystem!-->
+    <filesystem type="cow">filesystems/rootfs_lxc_centos64-ostack-compute</filesystem>
     <mem>2G</mem>
     <if id="1" net="MgmtNet">
       <ipv4>10.0.0.32/24</ipv4>
@@ -703,7 +696,10 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <filetree seq="step42" root="/etc/nova/">conf/compute2/nova/nova.conf</filetree>
     <filetree seq="step42" root="/etc/nova/">conf/compute2/nova/nova-compute.conf</filetree>
     <exec seq="step42" type="verbatim">
-        service nova-compute restart
+        systemctl enable libvirtd.service openstack-nova-compute.service
+        mkdir /var/lock/nova
+        chown nova:nova -R /var/lock/nova
+        systemctl start libvirtd.service openstack-nova-compute.service
         #rm -f /var/lib/nova/nova.sqlite
     </exec>
 

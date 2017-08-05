@@ -9,7 +9,7 @@
 #
 # Authors: David Fernández (david@dit.upm.es)
 #          Raul Alvarez (raul.alvarez@centeropenmiddleware.com)
-# Copyright (C) 2017 DIT-UPM
+# Copyright (C) 2016 DIT-UPM
 #           Departamento de Ingenieria de Sistemas Telematicos
 #           Universidad Politecnica de Madrid
 #           SPAIN
@@ -36,90 +36,59 @@
 #
 
 
-BASEROOTFSNAME=vnx_rootfs_lxc_ubuntu64-16.04-v025-ostack-ocata
-ROOTFSNAME=vnx_rootfs_lxc_ubuntu64-16.04-v025-openstack-controller
-ROOTFSLINKNAME="rootfs_lxc_ubuntu64-ostack-controller"
+BASEROOTFSNAME=vnx_rootfs_lxc_centos64-7-v025
+ROOTFSNAME=vnx_rootfs_lxc_centos64-7-v025-openstack-compute
+ROOTFSLINKNAME="rootfs_lxc_centos64-ostack-compute"
 # General tools
 # 2016-09: removed chrony as it does not work inside a controller
-PACKAGES="aptsh wget iperf traceroute telnet xterm curl ethtool man-db bash-completion wireshark xauth"
+PACKAGES="aptsh wget iperf traceroute telnet xterm curl ethtool bash-completion wireshark xauth"
 
 
 CUSTOMIZESCRIPT=$(cat <<EOF
 
 # Remove startup scripts
-# update-rc.d -f apache2 remove
-# echo manual | sudo tee /etc/init/isc-dhcp-server.override
-
-# Modify failsafe script to avoid delays on startup
-sed -i -e 's/.*sleep [\d]*.*/\tsleep 1/' /etc/init/failsafe.conf
 
 # Add ~/bin to root PATH
 sed -i -e '\$aPATH=\$PATH:~/bin' /root/.bashrc
 
 # Allow root login by ssh
-sed -i -e 's/^PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sed -i -e 's/^.*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 
 # Set locale to en_US. If set to es_ES a python error related to unicode strings arises when 
 # calling "openstack service create..." commands
-echo "LANG=en_US.UTF-8" > /etc/default/locale
+#echo "LANG=en_US.UTF-8" > /etc/default/locale
 
 
-export DEBIAN_FRONTEND=noninteractive
-
-# STEP 1: Environment
 # Openstack basic packages
-apt -y install software-properties-common
-add-apt-repository -y cloud-archive:ocata
-apt update
-apt -y dist-upgrade
-apt -y install python-openstackclient
-apt -y install git
-
-# SQL database
-debconf-set-selections <<< 'mariadb-server-5.5 mysql-server/root_password password xxxx'
-debconf-set-selections <<< 'mariadb-server-5.5 mysql-server/root_password_again password xxxx'
-apt -y install mariadb-server python-mysqldb
-
-# Message queue
-apt -y install rabbitmq-server
-
-# Memcached
-apt -y install memcached python-memcache
-
-# Mongodb for Telemetry service
-#apt-get -y install mongodb-server mongodb-clients python-pymongo
-#service mongodb stop
-#rm /var/lib/mongodb/journal/prealloc.*
-#service mongodb start
-
-
-# STEP 2: Identity service
-apt -y install keystone 
-##echo "manual" > /etc/init/keystone.override # Valid for U14.04
-#apt-get -y -o Dpkg::Options::="--force-confold" install memcached python-memcache keystone apache2 libapache2-mod-wsgi
-# Disable keystone startup in Ubuntu 16.04
-#systemctl disable keystone
-
-# STEP 3: Image service (Glance)
-apt -y install glance 
-#apt-get -y -o Dpkg::Options::="--force-confold" install glance # python-glanceclient
+yum -y install centos-release-openstack-ocata
+yum -y upgrade
+yum -y install python-openstackclient
+yum -y install git
 
 # STEP 4: Compute service (Nova)
-apt -y install nova-api nova-conductor nova-consoleauth nova-novncproxy nova-scheduler \
-  nova-placement-api
-#apt-get -y -o Dpkg::Options::="--force-confold" install nova-api nova-conductor nova-consoleauth nova-novncproxy nova-scheduler # python-novaclient nova-cert
+yum -y install openstack-nova-compute 
 
 # STEP 5: Network service (Neutron)
-apt -y install neutron-server neutron-plugin-ml2 
-#  neutron-linuxbridge-agent neutron-l3-agent neutron-dhcp-agent \
-#  neutron-metadata-agent
-#apt-get -y -o Dpkg::Options::="--force-confold" install neutron-server neutron-plugin-ml2 # neutron-linuxbridge-agent neutron-l3-agent neutron-dhcp-agent neutron-metadata-agent #python-neutronclient
-##apt-get -y -o Dpkg::Options::="--force-confold" install python-neutron-fwaas python-neutron-lbaas neutron-lbaasv2-agent git
-#apt-get -y -o Dpkg::Options::="--force-confold" install python-neutron-fwaas python-neutron-lbaas 
+yum -y install openstack-neutron-openvswitch ebtables ipset
 
-# STEP 6: Dashboard service
-apt -y install openstack-dashboard
-#apt-get -y -o Dpkg::Options::="--force-confold" install openstack-dashboard
+sed -i -e '/net\.ipv4\.conf\.all\.rp_filter/d' /etc/sysctl.conf
+sed -i -e '/net\.ipv4\.conf\.default\.rp_filter/d' /etc/sysctl.conf
+echo "# Configured by create-rootfs" >> /etc/sysctl.conf
+echo "net.ipv4.conf.all.rp_filter=0" >> /etc/sysctl.conf
+echo "net.ipv4.conf.default.rp_filter=0" >> /etc/sysctl.conf
+
+# Change libvirt default network (virbr0) addresses to avoid conflicts with the host
+#sed -i -e 's/192\.168\.122/192\.168\.123/g' /etc/libvirt/qemu/networks/default.xml
+
+# Add commands to create /dev/kvm and /dev/net/tun devices at startup (/etc/rc.d/rc.local)
+echo "" >> /etc/rc.d/rc.local
+echo "# /dev/net/tun" >> /etc/rc.d/rc.local
+echo "mkdir -p /dev/net/" >> /etc/rc.d/rc.local
+echo "mknod -m 666 /dev/net/tun c 10 200" >> /etc/rc.d/rc.local
+echo "" >> /etc/rc.d/rc.local
+echo "# /dev/kvm" >> /etc/rc.d/rc.local
+echo "mknod -m 660 /dev/kvm c 10 232" >> /etc/rc.d/rc.local
+echo "chown root:kvm /dev/kvm" >> /etc/rc.d/rc.local
 
 EOF
 )
@@ -190,8 +159,7 @@ function start_and_install_packages {
   lxc-attach -n $ROOTFSNAME -P $CDIR -- ifconfig eth0
   echo lxc-attach -n $ROOTFSNAME -P $CDIR -- ping -c 3 www.dit.upm.es
   lxc-attach -n $ROOTFSNAME -P $CDIR -- ping -c 3 www.dit.upm.es
-  lxc-attach -n $ROOTFSNAME -P $CDIR -- apt-get update
-  lxc-attach -n $ROOTFSNAME -P $CDIR -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get -y install $PACKAGES"
+  lxc-attach -n $ROOTFSNAME -P $CDIR -- bash -c "yum -y install $PACKAGES"
 
   # Create /dev/net/tun device
   lxc-attach -n $ROOTFSNAME -P $CDIR -- mkdir /dev/net 
