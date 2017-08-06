@@ -92,6 +92,8 @@ echo "# /dev/kvm" >> /etc/rc.d/rc.local
 echo "mknod -m 660 /dev/kvm c 10 232" >> /etc/rc.d/rc.local
 echo "chown root:kvm /dev/kvm" >> /etc/rc.d/rc.local
 
+chmod +x /etc/rc.d/rc.local
+
 # Configure the kernel to enable packet forwarding and disable reverse path filtering
 sed -i -e '/net\.ipv4\.ip_forward/d' /etc/sysctl.conf
 sed -i -e '/net\.ipv4\.conf\.all\.rp_filter/d' /etc/sysctl.conf

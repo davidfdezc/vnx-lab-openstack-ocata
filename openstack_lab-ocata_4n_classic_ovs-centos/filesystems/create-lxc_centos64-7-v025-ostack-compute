@@ -90,6 +90,8 @@ echo "# /dev/kvm" >> /etc/rc.d/rc.local
 echo "mknod -m 660 /dev/kvm c 10 232" >> /etc/rc.d/rc.local
 echo "chown root:kvm /dev/kvm" >> /etc/rc.d/rc.local
 
+chmod +x /etc/rc.d/rc.local
+
 EOF
 )
 
