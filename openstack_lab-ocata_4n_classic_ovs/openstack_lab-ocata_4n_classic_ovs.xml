@@ -131,9 +131,14 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <filetree seq="step2" root="/root/bin/">conf/controller/keystone/admin-openrc.sh</filetree>
     <filetree seq="step2" root="/root/bin/">conf/controller/keystone/demo-openrc.sh</filetree>
     <exec seq="step2" type="verbatim">
+        count=1; while ! mysqladmin ping ; do echo -n $count; echo ": waiting for mysql ..."; ((count++)) &amp;&amp; ((count==6)) &amp;&amp; echo "--" &amp;&amp; echo "-- ERROR: database not ready." &amp;&amp; echo "--" &amp;&amp; break; sleep 2; done
+    </exec>
+    <exec seq="step2" type="verbatim">
+
         mysql -u root --password='xxxx' -e "CREATE DATABASE keystone;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'localhost' IDENTIFIED BY 'xxxx';"
-        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%' IDENTIFIED BY 'xxxx'; flush privileges;"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "flush privileges;"
 
         su -s /bin/sh -c "keystone-manage db_sync" keystone
         keystone-manage fernet_setup --keystone-user keystone --keystone-group keystone
@@ -149,7 +154,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         #ln -s /etc/apache2/sites-available/wsgi-keystone.conf /etc/apache2/sites-enabled
         service apache2 restart
         rm -f /var/lib/keystone/keystone.db
-        sleep 3
+        sleep 5
 
         export OS_USERNAME=admin
         export OS_PASSWORD=xxxx
@@ -188,6 +193,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         mysql -u root --password='xxxx' -e "CREATE DATABASE glance;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'localhost' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'%' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "flush privileges;"
         source /root/bin/admin-openrc.sh
         openstack user create --domain default --password=xxxx glance
         openstack role add --project service --user glance admin
@@ -214,6 +220,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova.*       TO 'nova'@'%' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova_cell0.* TO 'nova'@'localhost' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON nova_cell0.* TO 'nova'@'%' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "flush privileges;"
 
         source /root/bin/admin-openrc.sh
 
@@ -260,6 +267,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         mysql -u root --password='xxxx' -e "CREATE DATABASE neutron;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'localhost' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'%' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "flush privileges;"
         source /root/bin/admin-openrc.sh
         openstack user create --domain default --password=xxxx neutron
         openstack role add --project service --user neutron admin
@@ -309,6 +317,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         mysql -u root --password='xxxx' -e "CREATE DATABASE trove;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON trove.* TO 'trove'@'localhost' IDENTIFIED BY 'xxxx';"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON trove.* TO 'trove'@'%' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "flush privileges;"
         source /root/bin/admin-openrc.sh
 
         openstack user create --domain default --password xxxx trove
@@ -342,6 +351,151 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         openstack flavor show m1.smaller >/dev/null 2>&amp;1 || openstack flavor create m1.smaller --ram 512 --disk 3 --vcpus 1 --id 6
         #trove create mysql_instance_1 m1.smaller --size 1 --databases myDB --users userA:xxxx --datastore_version mariadb --datastore mysql
     </exec>
+
+    <!-- STEP 8: Heat service -->
+    <cmd-seq seq="step8">step81,step82</cmd-seq>
+
+    <exec seq="step81" type="verbatim">
+        apt-get -y install heat-api heat-api-cfn heat-engine
+    </exec>
+
+    <filetree seq="step82" root="/etc/heat/">conf/controller/heat/heat.conf</filetree>
+    <filetree seq="step82" root="/root/heat/">conf/controller/heat/examples</filetree>
+    <exec seq="step82" type="verbatim">
+        mysql -u root --password='xxxx' -e "CREATE DATABASE heat;"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON heat.* TO 'heat'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON heat.* TO 'heat'@'%' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "flush privileges;"
+
+        source /root/bin/admin-openrc.sh
+        openstack user create --domain default --password xxxx heat
+        openstack role add --project service --user heat admin
+        openstack service  create --name heat     --description "Orchestration" orchestration
+        openstack service  create --name heat-cfn --description "Orchestration" cloudformation
+        openstack endpoint create --region RegionOne orchestration public http://controller:8004/v1/%\(tenant_id\)s
+        openstack endpoint create --region RegionOne orchestration internal http://controller:8004/v1/%\(tenant_id\)s
+        openstack endpoint create --region RegionOne orchestration admin http://controller:8004/v1/%\(tenant_id\)s
+        openstack endpoint create --region RegionOne cloudformation public http://controller:8000/v1
+        openstack endpoint create --region RegionOne cloudformation internal http://controller:8000/v1
+        openstack endpoint create --region RegionOne cloudformation admin http://controller:8000/v1
+        openstack domain   create --description "Stack projects and users" heat
+        openstack user     create --domain heat --password xxxx heat_domain_admin
+        openstack role add --domain heat --user-domain heat --user heat_domain_admin admin
+        openstack role create heat_stack_owner
+        openstack role add --project demo --user demo heat_stack_owner
+        openstack role create heat_stack_user
+
+        su -s /bin/sh -c "heat-manage db_sync" heat
+        service heat-api restart
+        service heat-api-cfn restart
+        service heat-engine restart
+
+    </exec>
+
+    <exec seq="create-demo-heat" type="verbatim">
+        source /root/bin/demo-openrc.sh
+
+        # Create internal network
+        openstack network create net-heat
+        openstack subnet create --network net-heat --gateway 10.1.10.1 --dns-nameserver 8.8.8.8 --subnet-range 10.1.10.0/24 --allocation-pool start=10.1.10.8,end=10.1.10.100 subnet-heat
+
+        mkdir -p /root/keys
+        openstack keypair create key-heat > /root/keys/key-heat
+        export NET_ID=$(openstack network list | awk '/ net-heat / { print $2 }')
+        openstack stack create -t /root/heat/examples/demo-template.yml --parameter "NetID=$NET_ID" stack
+
+    </exec>
+
+
+    <!-- STEP 9: Tacker service -->
+    <cmd-seq seq="step9">step91,step92</cmd-seq>
+
+    <exec seq="step91" type="verbatim">
+        apt-get -y install python-pip git
+        pip install --upgrade pip
+    </exec>
+
+    <filetree seq="step92" root="/usr/local/etc/tacker/">conf/controller/tacker/tacker.conf</filetree>
+    <filetree seq="step92" root="/usr/local/etc/tacker/">conf/controller/tacker/default-vim-config.yaml</filetree>
+    <filetree seq="step92" root="/root/tacker/">conf/controller/tacker/examples</filetree>
+    <exec seq="step92" type="verbatim">
+        sed -i -e 's/.*"resource_types:OS::Nova::Flavor":.*/    "resource_types:OS::Nova::Flavor": "role:admin",/' /etc/heat/policy.json 
+
+        mysql -u root --password='xxxx' -e "CREATE DATABASE tacker;"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON tacker.* TO 'tacker'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON tacker.* TO 'tacker'@'%' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "flush privileges;"
+
+        source /root/bin/admin-openrc.sh
+        openstack user create --domain default --password xxxx tacker
+        openstack role add --project service --user tacker admin
+        openstack service create --name tacker --description "Tacker Project" nfv-orchestration
+        openstack endpoint create --region RegionOne nfv-orchestration public   http://controller:9890/
+        openstack endpoint create --region RegionOne nfv-orchestration internal http://controller:9890/
+        openstack endpoint create --region RegionOne nfv-orchestration admin    http://controller:9890/
+
+        mkdir -p /root/tacker
+        cd /root/tacker
+        git clone https://github.com/openstack/tacker
+        cd tacker
+        git checkout stable/ocata
+        pip install -r requirements.txt
+        pip install tosca-parser
+        python setup.py install
+        mkdir -p /var/log/tacker
+
+        /usr/local/bin/tacker-db-manage --config-file /usr/local/etc/tacker/tacker.conf upgrade head
+
+        # Tacker client
+        cd /root/tacker
+        git clone https://github.com/openstack/python-tackerclient
+        cd python-tackerclient
+        git checkout stable/ocata
+        python setup.py install
+
+        # Tacker horizon
+        cd /root/tacker
+        git clone https://github.com/openstack/tacker-horizon
+        cd tacker-horizon
+        git checkout stable/ocata
+        python setup.py install
+        cp tacker_horizon/enabled/* /usr/share/openstack-dashboard/openstack_dashboard/enabled/
+        service apache2 restart
+
+        # Start tacker server
+        mkdir -p /var/log/tacker
+        nohup python /usr/local/bin/tacker-server \
+            --config-file /usr/local/etc/tacker/tacker.conf \
+            --log-file /var/log/tacker/tacker.log &amp;
+
+        # Register default VIM
+        tacker vim-register --is-default --config-file /usr/local/etc/tacker/default-vim-config.yaml \
+            --description "Default VIM" "Openstack-VIM"
+
+    </exec>
+    <exec seq="step93" type="verbatim">
+        nohup python /usr/local/bin/tacker-server \
+            --config-file /usr/local/etc/tacker/tacker.conf \
+            --log-file /var/log/tacker/tacker.log &amp;
+
+    </exec>
+
+    <exec seq="create-demo-tacker" type="verbatim">
+        source /root/bin/demo-openrc.sh
+
+        # Create internal network
+        openstack network create net-tacker
+        openstack subnet create --network net-tacker --gateway 10.1.11.1 --dns-nameserver 8.8.8.8 --subnet-range 10.1.11.0/24 --allocation-pool start=10.1.11.8,end=10.1.11.100 subnet-tacker
+
+        cd /root/tacker/examples
+        tacker vnfd-create --vnfd-file sample-vnfd.yaml testd
+
+        # Falla con error: 
+        # ERROR: Property error: : resources.VDU1.properties.image: : No module named v2.client
+        tacker vnf-create --vnfd-id $( tacker vnfd-list | awk '/ testd / { print $2 }' ) test
+
+    </exec>
+
 
     <exec seq="load-img" type="verbatim">
         source /root/bin/admin-openrc.sh
