@@ -47,7 +47,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <!-- start-all for 'noconfig' scenario: all installation steps included -->
     <!--cmd-seq seq="start-all">step1,step2,step3,step4,step5,step6</cmd-seq-->
     <!-- start-all for configured scenario: only network and compute node steps included -->
-    <cmd-seq seq="start-all">step42,step43,step52,step53</cmd-seq>
+    <cmd-seq seq="start-all">step00,step42,step43,step52,step53</cmd-seq>
   </global>
 
   <net name="MgmtNet" mode="openvswitch" mtu="1450"/>
@@ -252,6 +252,16 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         #rm -f /var/lib/nova/nova.sqlite
     </exec>
 
+    <exec seq="step43" type="verbatim">
+        source /root/bin/admin-openrc.sh
+        # Wait for compute1 hypervisor to be up
+        while [ $( openstack hypervisor list --matching compute1 -f value -c State ) != 'up' ]; do echo "waiting for compute1 hypervisor..."; sleep 5; done
+    </exec>
+    <exec seq="step43" type="verbatim">
+        source /root/bin/admin-openrc.sh
+        # Wait for compute2 hypervisor to be up
+        while [ $( openstack hypervisor list --matching compute2 -f value -c State ) != 'up' ]; do echo "waiting for compute2 hypervisor..."; sleep 5; done
+    </exec>
     <exec seq="step43" type="verbatim">
         source /root/bin/admin-openrc.sh
         openstack hypervisor list
@@ -582,7 +592,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         # Create virtual machine
         mkdir -p /root/keys
         openstack keypair create vm3 > /root/keys/vm3
-        openstack server create --flavor m1.smaller --image trusty-server-cloudimg-amd64-vnx vm3 --nic net-id=net0 --key-name vm3
+        openstack server create --flavor m1.smaller --image xenial-server-cloudimg-amd64-vnx vm3 --nic net-id=net0 --key-name vm3
         # Assign floating IP address to vm3
         #openstack ip floating add $( openstack ip floating create ExtNet -c ip -f value ) vm3
         openstack server add floating ip vm3 $( openstack floating ip create ExtNet -c floating_ip_address -f value )
@@ -717,7 +727,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <!-- <filetree seq="step52" root="/etc/neutron/plugins/ml2/">conf/network/neutron/ml2_conf.ini</filetree> -->
 
     <!--filetree seq="step52" root="/etc/neutron/plugins/ml2/">conf/network/neutron/openvswitch_agent.ini</filetree-->
-    <!-- <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/dnsmasq-neutron.conf</filetree> -->
+    <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/dnsmasq-neutron.conf</filetree>
     <!-- <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/fwaas_driver.ini</filetree> -->
     <!-- <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/lbaas_agent.ini</filetree> -->
     <exec seq="step52" type="verbatim">
@@ -885,6 +895,19 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <hostif net="MgmtNet">
       <ipv4>10.0.0.1/24</ipv4>
     </hostif>
+    <exec seq="step00" type="verbatim">
+    	echo "--\n-- Waiting for all VMs to be ssh ready...\n--"
+    </exec>
+    <exec seq="step00" type="verbatim">
+    	# Wait till ssh is accesible in all VMs
+    	while ! $( nc -z controller 22 ); do sleep 1; done
+    	while ! $( nc -z network 22 ); do sleep 1; done
+    	while ! $( nc -z compute1 22 ); do sleep 1; done
+    	while ! $( nc -z compute2 22 ); do sleep 1; done
+    </exec>
+    <exec seq="step00" type="verbatim">
+    	echo "-- ...OK\n--"
+    </exec>
   </host>
 
 </vnx>
