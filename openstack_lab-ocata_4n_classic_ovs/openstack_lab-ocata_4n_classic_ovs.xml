@@ -33,7 +33,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <scenario_name>openstack_tutorial-ocata</scenario_name>
     <ssh_key>/root/.ssh/id_rsa.pub</ssh_key>
     <automac offset="0"/>
-    <!--vm_mgmt type="none" /-->
+    <!--vm_mgmt type="none"/-->
     <vm_mgmt type="private" network="10.20.0.0" mask="24" offset="0">
        <host_mapping />
     </vm_mgmt> 
@@ -42,12 +42,14 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         <console id="1" display="yes"/>
     </vm_defaults>
     <cmd-seq seq="step1-6">step1,step2,step3,step4,step5,step6</cmd-seq>
-    <cmd-seq seq="step4">step41,step42,step43</cmd-seq>
+    <cmd-seq seq="step4">step41,step42,step43,step44</cmd-seq>
     <cmd-seq seq="step5">step51,step52,step53</cmd-seq>
     <!-- start-all for 'noconfig' scenario: all installation steps included -->
     <!--cmd-seq seq="start-all">step1,step2,step3,step4,step5,step6</cmd-seq-->
     <!-- start-all for configured scenario: only network and compute node steps included -->
-    <cmd-seq seq="start-all">step00,step42,step43,step52,step53</cmd-seq>
+    <cmd-seq seq="step10">step101,step102</cmd-seq>
+    <cmd-seq seq="start-all">step00,step42,step43,step44,step52,step53</cmd-seq>
+    <cmd-seq seq="discover-hosts">step44</cmd-seq>
   </global>
 
   <net name="MgmtNet" mode="openvswitch" mtu="1450"/>
@@ -58,6 +60,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
 
   <vm name="controller" type="lxc" arch="x86_64">
     <filesystem type="cow">filesystems/rootfs_lxc_ubuntu64-ostack-controller</filesystem>
+    <mem>1G</mem>
     <!--console id="0" display="yes"/-->
     <if id="1" net="MgmtNet">
       <ipv4>10.0.0.11/24</ipv4>
@@ -92,6 +95,11 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         # Change MgmtNet and TunnNet interfaces MTU
         ifconfig eth1 mtu 1450
         sed -i -e '/iface eth1 inet static/a \   mtu 1450' /etc/network/interfaces
+
+        # Change owner of secret_key to horizon to avoid a 500 error when
+        # accessing horizon (new problem arosed in v04)
+        # See: https://ask.openstack.org/en/question/30059/getting-500-internal-server-error-while-accessing-horizon-dashboard-in-ubuntu-icehouse/
+        chown horizon /var/lib/openstack-dashboard/secret_key
     </exec>
 
     <!-- STEP 1: Basic services -->
@@ -262,7 +270,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         # Wait for compute2 hypervisor to be up
         while [ $( openstack hypervisor list --matching compute2 -f value -c State ) != 'up' ]; do echo "waiting for compute2 hypervisor..."; sleep 5; done
     </exec>
-    <exec seq="step43" type="verbatim">
+    <exec seq="step44" type="verbatim">
         source /root/bin/admin-openrc.sh
         openstack hypervisor list
         su -s /bin/sh -c "nova-manage cell_v2 discover_hosts --verbose" nova
@@ -270,9 +278,8 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
 
     <!-- STEP 5: Network service (Neutron) -->
     <filetree seq="step51" root="/etc/neutron/">conf/controller/neutron/neutron.conf</filetree>
+    <!--filetree seq="step51" root="/etc/neutron/">conf/controller/neutron/neutron_lbaas.conf</filetree-->
     <filetree seq="step51" root="/etc/neutron/plugins/ml2/">conf/controller/neutron/ml2_conf.ini</filetree>
-    <!--filetree seq="step51" root="/etc/neutron/">conf/controller/neutron/fwaas_driver.ini</filetree!-->
-    <!--filetree seq="step51" root="/etc/neutron/">conf/controller/neutron/lbaas_agent.ini</filetree!-->
     <exec seq="step51" type="verbatim">
         mysql -u root --password='xxxx' -e "CREATE DATABASE neutron;"
         mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'localhost' IDENTIFIED BY 'xxxx';"
@@ -288,7 +295,10 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         su -s /bin/sh -c "neutron-db-manage --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugins/ml2/ml2_conf.ini upgrade head" neutron
 
         # LBaaS
-        #neutron-db-manage --subproject neutron-lbaas upgrade head
+        neutron-db-manage --subproject neutron-lbaas upgrade head
+
+        # FwaaS
+        neutron-db-manage --subproject neutron-fwaas upgrade head
 
         # LBaaS Dashboard panels
         #git clone https://git.openstack.org/openstack/neutron-lbaas-dashboard
@@ -365,9 +375,10 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <!-- STEP 8: Heat service -->
     <cmd-seq seq="step8">step81,step82</cmd-seq>
 
-    <exec seq="step81" type="verbatim">
+    <!--exec seq="step81" type="verbatim">
+        # Moved to create filesystem script
         apt-get -y install heat-api heat-api-cfn heat-engine
-    </exec>
+    </exec-->
 
     <filetree seq="step82" root="/etc/heat/">conf/controller/heat/heat.conf</filetree>
     <filetree seq="step82" root="/root/heat/">conf/controller/heat/examples</filetree>
@@ -411,7 +422,8 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
 
         mkdir -p /root/keys
         openstack keypair create key-heat > /root/keys/key-heat
-        export NET_ID=$(openstack network list | awk '/ net-heat / { print $2 }')
+        #export NET_ID=$(openstack network list | awk '/ net-heat / { print $2 }')
+        export NET_ID=$( openstack network list --name net-heat -f value -c ID )
         openstack stack create -t /root/heat/examples/demo-template.yml --parameter "NetID=$NET_ID" stack
 
     </exec>
@@ -506,6 +518,98 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
 
     </exec>
 
+    <!--filetree seq="step92" root="/usr/local/etc/tacker/">conf/controller/tacker/tacker.conf</filetree>
+    <exec seq="step92" type="verbatim">
+    </exec-->
+
+    <!-- STEP 10: Ceilometer service -->
+    <exec seq="step101" type="verbatim">
+		export DEBIAN_FRONTEND=noninteractive
+		#apt-get -y install python-pip
+        #pip install --upgrade pip
+		#pip install gnocchi[mysql,keystone] gnocchiclient
+		apt-get -y install ceilometer-collector ceilometer-agent-central ceilometer-agent-notification python-ceilometerclient
+        apt-get -y install gnocchi-common gnocchi-api gnocchi-metricd gnocchi-statsd python-gnocchiclient
+
+    </exec>
+
+    <filetree seq="step102" root="/etc/ceilometer/">conf/controller/ceilometer/ceilometer.conf</filetree>
+    <!--filetree seq="step102" root="/etc/mongodb.conf">conf/controller/mongodb/mongodb.conf</filetree-->
+    <!--filetree seq="step102" root="/etc/apache2/sites-available/ceilometer.conf">conf/controller/ceilometer/apache/ceilometer.conf</filetree-->
+    <!--filetree seq="step102" root="/etc/apache2/sites-available/gnocchi.conf">conf/controller/ceilometer/apache/gnocchi.conf</filetree-->
+    <filetree seq="step102" root="/etc/gnocchi/">conf/controller/ceilometer/gnocchi.conf</filetree>
+    <filetree seq="step102" root="/etc/gnocchi/">conf/controller/ceilometer/api-paste.ini</filetree>
+    <exec seq="step102" type="verbatim">
+
+        # Create gnocchi database
+        mysql -u root --password='xxxx' -e "CREATE DATABASE gnocchidb default character set utf8;"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON gnocchidb.* TO 'gnocchi'@'%' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "GRANT ALL PRIVILEGES ON gnocchidb.* TO 'gnocchi'@'localhost' IDENTIFIED BY 'xxxx';"
+        mysql -u root --password='xxxx' -e "flush privileges;"
+
+    	# Ceilometer
+        source /root/bin/admin-openrc.sh 
+    	openstack user create --domain default --password xxxx ceilometer
+    	openstack role add --project service --user ceilometer admin
+    	openstack service create --name ceilometer --description "Telemetry" metering
+    	openstack user create --domain default --password xxxx gnocchi
+        openstack role add --project service --user gnocchi admin
+    	openstack service create --name gnocchi --description "Metric Service" metric
+		openstack endpoint create --region RegionOne metric public http://controller:8041
+		openstack endpoint create --region RegionOne metric internal http://controller:8041
+		openstack endpoint create --region RegionOne metric admin http://controller:8041
+
+        mkdir -p /var/cache/gnocchi
+        chown gnocchi:gnocchi -R  /var/cache/gnocchi
+        mkdir -p /var/lib/gnocchi
+        chown gnocchi:gnocchi -R  /var/lib/gnocchi
+
+        gnocchi-upgrade
+        sed -i 's/8000/8041/g' /usr/bin/gnocchi-api
+        # Correct error in gnocchi-api startup script
+        sed -i -e 's/exec $DAEMON $DAEMON_ARGS/exec $DAEMON -- $DAEMON_ARGS/' /etc/init.d/gnocchi-api
+        systemctl enable gnocchi-api.service gnocchi-metricd.service gnocchi-statsd.service
+        systemctl start gnocchi-api.service gnocchi-metricd.service gnocchi-statsd.service
+
+		ceilometer-upgrade --skip-metering-database
+		service ceilometer-agent-central restart
+		service ceilometer-agent-notification restart
+		service ceilometer-collector restart
+
+  		# Enable Glance service meters
+  		crudini --set /etc/glance/glance-api.conf DEFAULT transport_url rabbit://openstack:xxxx@controller
+		crudini --set /etc/glance/glance-api.conf oslo_messaging_notifications driver messagingv2
+		crudini --set /etc/glance/glance-registry.conf DEFAULT transport_url rabbit://openstack:xxxx@controller
+		crudini --set /etc/glance/glance-registry.conf oslo_messaging_notifications driver messagingv2
+
+        service glance-registry restart
+        service glance-api restart
+
+        # Enable Neutron service meters
+        crudini --set /etc/neutron/neutron.conf oslo_messaging_notifications driver messagingv2
+        service neutron-server restart
+
+        # Enable Heat service meters
+        crudini --set /etc/heat/heat.conf oslo_messaging_notifications driver messagingv2
+        service heat-api restart
+        service heat-api-cfn restart
+        service heat-engine restart
+
+  		#crudini --set /etc/glance/glance-api.conf DEFAULT rpc_backend rabbit
+		#crudini --set /etc/glance/glance-api.conf oslo_messaging_notifications driver messagingv2
+		#crudini --set /etc/glance/glance-api.conf oslo_messaging_rabbit rabbit_host controller
+		#crudini --set /etc/glance/glance-api.conf oslo_messaging_rabbit rabbit_userid openstack
+		#crudini --set /etc/glance/glance-api.conf oslo_messaging_rabbit rabbit_password xxxx
+		
+		#crudini --set /etc/glance/glance-registry.conf DEFAULT rpc_backend rabbit
+		#crudini --set /etc/glance/glance-registry.conf oslo_messaging_notifications driver messagingv2
+		#crudini --set /etc/glance/glance-registry.conf oslo_messaging_rabbit rabbit_host controller
+		#crudini --set /etc/glance/glance-registry.conf oslo_messaging_rabbit rabbit_userid openstack
+		#crudini --set /etc/glance/glance-registry.conf oslo_messaging_rabbit rabbit_password xxxx
+
+
+    </exec>
+
 
     <exec seq="load-img" type="verbatim">
         source /root/bin/admin-openrc.sh
@@ -523,9 +627,9 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         rm /tmp/images/cirros-0.3.4-x86_64-disk*.qcow2
         
         # Ubuntu image (trusty)
-        wget -P /tmp/images http://138.4.7.228/download/vnx/filesystems/ostack-images/trusty-server-cloudimg-amd64-disk1-vnx.qcow2
-        glance image-create --name "trusty-server-cloudimg-amd64-vnx" --file /tmp/images/trusty-server-cloudimg-amd64-disk1-vnx.qcow2 --disk-format qcow2 --container-format bare --visibility public --progress
-        rm /tmp/images/trusty-server-cloudimg-amd64-disk1*.qcow2
+        #wget -P /tmp/images http://138.4.7.228/download/vnx/filesystems/ostack-images/trusty-server-cloudimg-amd64-disk1-vnx.qcow2
+        #glance image-create --name "trusty-server-cloudimg-amd64-vnx" --file /tmp/images/trusty-server-cloudimg-amd64-disk1-vnx.qcow2 --disk-format qcow2 --container-format bare --visibility public --progress
+        #rm /tmp/images/trusty-server-cloudimg-amd64-disk1*.qcow2
 
         # Ubuntu image (xenial)
         wget -P /tmp/images http://138.4.7.228/download/vnx/filesystems/ostack-images/xenial-server-cloudimg-amd64-disk1-vnx.qcow2
@@ -602,17 +706,23 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         source /root/bin/admin-openrc.sh
 
         # Create vlan based networks and subnetworks
-        neutron net-create vlan1000 --shared --provider:physical_network vlan --provider:network_type vlan   --provider:segmentation_id 1000
-        neutron net-create vlan1001 --shared --provider:physical_network vlan --provider:network_type vlan   --provider:segmentation_id 1001
-        neutron subnet-create vlan1000 10.1.2.0/24 --name vlan1000-subnet --allocation-pool start=10.1.2.2,end=10.1.2.99 --gateway 10.1.2.1 --dns-nameserver 8.8.8.8
-        neutron subnet-create vlan1001 10.1.3.0/24 --name vlan1001-subnet --allocation-pool start=10.1.3.2,end=10.1.3.99 --gateway 10.1.3.1 --dns-nameserver 8.8.8.8
+        #neutron net-create vlan1000 --shared --provider:physical_network vlan --provider:network_type vlan   --provider:segmentation_id 1000
+        #neutron net-create vlan1001 --shared --provider:physical_network vlan --provider:network_type vlan   --provider:segmentation_id 1001
+        openstack network create --share --provider-physical-network vlan --provider-network-type vlan --provider-segment 1000 vlan1000
+        openstack network create --share --provider-physical-network vlan --provider-network-type vlan --provider-segment 1001 vlan1001
+        #neutron subnet-create vlan1000 10.1.2.0/24 --name vlan1000-subnet --allocation-pool start=10.1.2.2,end=10.1.2.99 --gateway 10.1.2.1 --dns-nameserver 8.8.8.8
+        #neutron subnet-create vlan1001 10.1.3.0/24 --name vlan1001-subnet --allocation-pool start=10.1.3.2,end=10.1.3.99 --gateway 10.1.3.1 --dns-nameserver 8.8.8.8
+        openstack subnet create --network vlan1000 --gateway 10.1.2.1 --dns-nameserver 8.8.8.8 --subnet-range 10.1.2.0/24 --allocation-pool start=10.1.2.2,end=10.1.2.99 subvlan1000
+        openstack subnet create --network vlan1001 --gateway 10.1.3.1 --dns-nameserver 8.8.8.8 --subnet-range 10.1.3.0/24 --allocation-pool start=10.1.3.2,end=10.1.3.99 subvlan1001
+
 
         # Create virtual machine
         mkdir -p tmp
         openstack keypair create vm3 > tmp/vm3
-        openstack server create --flavor m1.tiny --image cirros-0.3.4-x86_64-vnx vm3 --nic net-id=vlan1000
+        openstack server create --flavor m1.tiny --image cirros-0.3.4-x86_64-vnx vm3 --nic net-id=vlan1000 --key-name vm3
         openstack keypair create vm4 > tmp/vm4
-        openstack server create --flavor m1.tiny --image cirros-0.3.4-x86_64-vnx vm4 --nic net-id=vlan1001
+        openstack server create --flavor m1.tiny --image cirros-0.3.4-x86_64-vnx vm4 --nic net-id=vlan1001 --key-name vm4
+
 
         # Create security group rules to allow ICMP, SSH and WWW access
         openstack security group rule create --proto icmp --dst-port 0  default
@@ -629,13 +739,17 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         openstack --os-auth-url http://controller:35357/v3 \
           --os-project-domain-name default --os-user-domain-name default \
           --os-project-name admin --os-username admin token issue
+    </exec>
 
+    <exec seq="verify" type="verbatim">
         echo "--"
         echo "-- Glance (images)"
         echo "--"
         echo "Command: openstack image list"
         openstack image list
+    </exec>
 
+    <exec seq="verify" type="verbatim">
         echo "--"
         echo "-- Nova (compute)"
         echo "--"
@@ -647,7 +761,9 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         openstack catalog list
         echo "Command: nova-status upgrade check"
         nova-status upgrade check
+    </exec>
 
+    <exec seq="verify" type="verbatim">
         echo "--"
         echo "-- Neutron (network)"
         echo "--"
@@ -659,7 +775,6 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
         openstack security group list
         echo "Command: openstack security group rule list"
         openstack security group rule list
-
     </exec>
 
   </vm>
@@ -703,7 +818,7 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
 
     <!-- Copy ntp config and restart service -->
     <!-- Note: not used because ntp cannot be used inside a container. Clocks are supposed to be synchronized
-         between the vms/containers and the host --> 
+         between the vms/containers and the host -->
     <!--filetree seq="on_boot" root="/etc/chrony/chrony.conf">conf/ntp/chrony-others.conf</filetree>
     <exec seq="on_boot" type="verbatim">
         service chrony restart
@@ -721,27 +836,17 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <!--filetree seq="step52" root="/etc/neutron/plugins/ml2/">conf/network/neutron/linuxbridge_agent.ini</filetree-->
     <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/l3_agent.ini</filetree>
     <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/dhcp_agent.ini</filetree>
-
-
-    <!-- <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/neutron.conf</filetree> -->
-    <!-- <filetree seq="step52" root="/etc/neutron/plugins/ml2/">conf/network/neutron/ml2_conf.ini</filetree> -->
-
-    <!--filetree seq="step52" root="/etc/neutron/plugins/ml2/">conf/network/neutron/openvswitch_agent.ini</filetree-->
     <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/dnsmasq-neutron.conf</filetree>
-    <!-- <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/fwaas_driver.ini</filetree> -->
-    <!-- <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/lbaas_agent.ini</filetree> -->
+    <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/fwaas_driver.ini</filetree>
+    <filetree seq="step52" root="/etc/neutron/">conf/network/neutron/lbaas_agent.ini</filetree>
     <exec seq="step52" type="verbatim">
         ovs-vsctl add-br br-vlan
         ovs-vsctl add-port br-vlan eth3
         #ovs-vsctl add-br br-ex
         ovs-vsctl add-port br-provider eth4
 
-        #service neutron-lbaasv2-agent restart
-        #service openvswitch-switch restart
-        #service neutron-openvswitch-agent restart
-        #service neutron-l3-agent restart
-        #service neutron-dhcp-agent restart
-        #service neutron-metadata-agent restart
+        service neutron-lbaasv2-agent restart
+        service openvswitch-switch restart
 		
         service neutron-openvswitch-agent restart
 		#service neutron-linuxbridge-agent restart
@@ -811,12 +916,31 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <filetree seq="step53" root="/etc/neutron/plugins/ml2/">conf/compute1/neutron/openvswitch_agent.ini</filetree>
     <!--filetree seq="step53" root="/etc/neutron/plugins/ml2/">conf/compute1/neutron/ml2_conf.ini</filetree!-->
     <exec seq="step53" type="verbatim">
-        #ovs-vsctl add-br br-vlan
-        #ovs-vsctl add-port br-vlan eth3
-        #service openvswitch-switch restart
+        ovs-vsctl add-br br-vlan
+        ovs-vsctl add-port br-vlan eth3
+        service openvswitch-switch restart
         service nova-compute restart
         service neutron-openvswitch-agent restart
         #service neutron-linuxbridge-agent restart
+    </exec>
+
+    <!--filetree seq="step92" root="/usr/local/etc/tacker/">conf/controller/tacker/tacker.conf</filetree>
+    <exec seq="step92" type="verbatim">
+    </exec-->
+
+    <!-- STEP 10: Ceilometer service -->
+    <exec seq="step101" type="verbatim">
+		export DEBIAN_FRONTEND=noninteractive
+        apt-get -y install ceilometer-agent-compute
+    </exec>
+    <filetree seq="step102" root="/etc/ceilometer/">conf/compute2/ceilometer/ceilometer.conf</filetree>
+    <exec seq="step102" type="verbatim">
+		crudini --set /etc/nova/nova.conf DEFAULT instance_usage_audit True
+		crudini --set /etc/nova/nova.conf DEFAULT instance_usage_audit_period hour
+		crudini --set /etc/nova/nova.conf DEFAULT notify_on_state_change vm_and_task_state
+		crudini --set /etc/nova/nova.conf oslo_messaging_notifications driver messagingv2
+		service ceilometer-agent-compute restart
+		service nova-compute restart
     </exec>
 
   </vm>
@@ -877,12 +1001,27 @@ Copyright (C) 2017 Departamento de Ingenieria de Sistemas Telematicos (DIT)
     <filetree seq="step53" root="/etc/neutron/plugins/ml2/">conf/compute2/neutron/openvswitch_agent.ini</filetree>
     <!--filetree seq="step53" root="/etc/neutron/plugins/ml2/">conf/compute2/neutron/ml2_conf.ini</filetree!-->
     <exec seq="step53" type="verbatim">
-        #ovs-vsctl add-br br-vlan
-        #ovs-vsctl add-port br-vlan eth3
-        #service openvswitch-switch restart
+        ovs-vsctl add-br br-vlan
+        ovs-vsctl add-port br-vlan eth3
+        service openvswitch-switch restart
         service nova-compute restart
         service neutron-openvswitch-agent restart
         #service neutron-linuxbridge-agent restart
+    </exec>
+
+    <!-- STEP 10: Ceilometer service -->
+    <exec seq="step101" type="verbatim">
+		export DEBIAN_FRONTEND=noninteractive
+        apt-get -y install ceilometer-agent-compute
+    </exec>
+    <filetree seq="step102" root="/etc/ceilometer/">conf/compute2/ceilometer/ceilometer.conf</filetree>
+    <exec seq="step102" type="verbatim">
+		crudini --set /etc/nova/nova.conf DEFAULT instance_usage_audit True
+		crudini --set /etc/nova/nova.conf DEFAULT instance_usage_audit_period hour
+		crudini --set /etc/nova/nova.conf DEFAULT notify_on_state_change vm_and_task_state
+		crudini --set /etc/nova/nova.conf oslo_messaging_notifications driver messagingv2
+		service ceilometer-agent-compute restart
+		service nova-compute restart
     </exec>
 
   </vm>

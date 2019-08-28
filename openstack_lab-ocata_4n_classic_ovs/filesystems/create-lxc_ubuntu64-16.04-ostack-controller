@@ -9,7 +9,7 @@
 #
 # Authors: David Fernández (david@dit.upm.es)
 #          Raul Alvarez (raul.alvarez@centeropenmiddleware.com)
-# Copyright (C) 2017 DIT-UPM
+# Copyright (C) 2018 DIT-UPM
 #           Departamento de Ingenieria de Sistemas Telematicos
 #           Universidad Politecnica de Madrid
 #           SPAIN
@@ -40,8 +40,8 @@ BASEROOTFSNAME=vnx_rootfs_lxc_ubuntu64-16.04-v025-ostack-ocata
 ROOTFSNAME=vnx_rootfs_lxc_ubuntu64-16.04-v025-openstack-controller
 ROOTFSLINKNAME="rootfs_lxc_ubuntu64-ostack-controller"
 # General tools
-# 2016-09: removed chrony as it does not work inside a controller
-PACKAGES="aptsh wget iperf traceroute telnet xterm curl ethtool man-db bash-completion wireshark xauth"
+# 2016-09: removed chrony as it does not work inside a container
+PACKAGES="aptsh wget iperf traceroute telnet xterm curl ethtool man-db bash-completion wireshark-gtk xauth crudini python-pip"
 
 
 CUSTOMIZESCRIPT=$(cat <<EOF
@@ -63,8 +63,14 @@ sed -i -e 's/^PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 # calling "openstack service create..." commands
 echo "LANG=en_US.UTF-8" > /etc/default/locale
 
+# Disable auto-upgrades if enabled
+sed -i -e 's/"1"/"0"/g' /etc/apt/apt.conf.d/20auto-upgrades
+
 
 export DEBIAN_FRONTEND=noninteractive
+
+# Upgrade pip
+pip install --upgrade pip
 
 # STEP 1: Environment
 # Openstack basic packages
@@ -111,19 +117,47 @@ apt -y install nova-api nova-conductor nova-consoleauth nova-novncproxy nova-sch
 
 # STEP 5: Network service (Neutron)
 apt -y install neutron-server neutron-plugin-ml2 
+apt -y -o Dpkg::Options::="--force-confold" install python-neutron-fwaas python-neutron-lbaas python-neutron-lbaas-dashboard
 #  neutron-linuxbridge-agent neutron-l3-agent neutron-dhcp-agent \
 #  neutron-metadata-agent
 #apt-get -y -o Dpkg::Options::="--force-confold" install neutron-server neutron-plugin-ml2 # neutron-linuxbridge-agent neutron-l3-agent neutron-dhcp-agent neutron-metadata-agent #python-neutronclient
 ##apt-get -y -o Dpkg::Options::="--force-confold" install python-neutron-fwaas python-neutron-lbaas neutron-lbaasv2-agent git
-#apt-get -y -o Dpkg::Options::="--force-confold" install python-neutron-fwaas python-neutron-lbaas 
 
 # STEP 6: Dashboard service
 apt -y install openstack-dashboard
 #apt-get -y -o Dpkg::Options::="--force-confold" install openstack-dashboard
 
+# STEP 8: Heat service
+apt -y install heat-api heat-api-cfn heat-engine
+
+
+
 EOF
 )
 
+function customize_config {
+
+  # Modifications to config and other files in the directory where the rootfs is located
+  # config file is located here: ${ROOTFSNAME}/config
+
+cat << EOF >> ${ROOTFSNAME}/config
+
+# Create /dev/net/tun
+lxc.cgroup.devices.allow = c 10:200 rwm
+lxc.hook.autodev = sh -c "modprobe tun; cd \${LXC_ROOTFS_MOUNT}/dev; mkdir net; mknod net/tun c 10 200; chmod 0666 net/tun"
+
+# Create /dev/kvm
+lxc.cgroup.devices.allow = c 10:232 rwm
+lxc.hook.autodev = sh -c "cd \${LXC_ROOTFS_MOUNT}/dev; mknod -m 660 kvm c 10 232; chown root:\$(grep kvm \${LXC_ROOTFS_MOUNT}/etc/group | awk -F ':' '{print \$3}') kvm"
+EOF
+ 
+
+}
+
+
+#
+# Do not modify below this line...or do it whit care.
+#
 function customize_rootfs {
 
   echo "-----------------------------------------------------------------------"
@@ -140,7 +174,6 @@ function customize_rootfs {
 #
 
 function create_new_rootfs {
-
 
   #clear
 
@@ -237,6 +270,7 @@ create_new_rootfs
 start_and_install_packages 
 customize_rootfs
 lxc-stop -n $ROOTFSNAME -P $CDIR # Stop the VM
+customize_config
 create_rootfs_tgz
 
 echo "...done"
